@@ -1,0 +1,77 @@
+name: CI/CD LAB8 - Pipeline Base
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  Build:
+    name: Build e Testes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v3
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest httpx
+
+      - name: Executar testes com pytest
+        run: PYTHONPATH=. pytest tests/ -v --tb=short
+
+  Imagem:
+    name: Build e Push da Imagem Docker
+    runs-on: ubuntu-latest
+    needs: Build
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Login no Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build e Push da imagem
+        uses: docker/build-push-action@v7
+        with:
+          push: true
+          tags: |
+            viniciusporcionato/senai_fastapi:latest
+            viniciusporcionato/senai_fastapi:${{ github.sha }}
+
+  Deploy:
+    name: Deploy na EC2 (HOMOL)
+    runs-on: ubuntu-latest
+    needs: Imagem
+    steps:
+      - name: Deploy via SSH na EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            docker pull viniciusporcionato/senai_fastapi:latest
+            docker stop senai_fastapi 2>/dev/null || true
+            docker rm senai_fastapi 2>/dev/null || true
+            docker run -d \
+              --name senai_fastapi \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              viniciusporcionato/senai_fastapi:latest
+            sleep 5
+            curl -f http://localhost:8080/health || exit 1
+            echo "Deploy concluido com sucesso!"
+            docker image prune -f
